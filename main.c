@@ -2,29 +2,55 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 
-#define ASCII_SIZE 1u << 7 // 7-bit ASCII
-/* Struct for priority queue implementation */
-struct qnode {
-    struct qnode* next;
-    struct pair {
-        int ch;
-        size_t occ;
-    } p;
+/* 7-bit ASCII supported*/
+#define ASCII_SIZE 1u << 7
+
+/* A pair contains a tuple of 2 elements
+ * (character, number_of_occurences) */
+struct pair { int ch; size_t occ; } p;
+
+
+/* Struct for huffman tree implementation.
+ * Each node has two child and carries a pair */
+struct tnode {
+    struct tnode *left, *right;
+    struct pair p;
 };
 
-struct qnode* queue_create_node(struct pair p)
+/* Struct for priority queue implementation.
+ * Carried data is a pointer to a tree node */
+struct qnode {
+    struct qnode* next;
+    struct tnode* tn;
+};
+
+struct tnode* tree_create_node(struct pair p, struct tnode* left, struct tnode* right)
 {
-    /* Create a new node with provided pair 
-     * Primarly used by other queue functions */
-    struct qnode* new = malloc(sizeof(struct qnode));
+    /* Create a new node for the huffman tree. Each
+     * node has two child and carries a pair (character, number_of_occurences)
+     * Leaves don't have childs so left and right fields are just NULLs. */
+    struct tnode* new = malloc(sizeof(struct tnode));
     assert(new != NULL && "Call to malloc() failed.");
-    new->next = NULL;
+    new->left = left;
+    new->right = right;
     new->p = p;
     return new;
 }
 
-void queue_offer(struct qnode** head, struct pair p)
+struct qnode* queue_create_node(struct tnode* tn)
+{
+    /* Create a new node carrying a pointer to a tree node.
+     * Primarly used by other queue functions */
+    struct qnode* new = malloc(sizeof(struct qnode));
+    assert(new != NULL && "Call to malloc() failed.");
+    new->next = NULL;
+    new->tn = tn;
+    return new;
+}
+
+void queue_offer(struct qnode** head, struct tnode* tn)
 {
     /* Insert a new node in the queue ensuring its
      * correct position. Lower values of .occ field
@@ -33,11 +59,11 @@ void queue_offer(struct qnode** head, struct pair p)
     struct qnode* prev_to_probe = NULL;
     /* Get the probe to the right position for the 
      * insertion of new node */
-    while (probe != NULL && p.occ > probe->p.occ) {
+    while (probe != NULL && tn->p.occ > probe->tn->p.occ) {
         prev_to_probe = probe;
         probe = probe->next;
     }
-    struct qnode* new = queue_create_node(p);
+    struct qnode* new = queue_create_node(tn);
     new->next = probe;
     /* New node's position is at the start of the queue*/
     if (prev_to_probe == NULL) *head = new;
@@ -45,35 +71,19 @@ void queue_offer(struct qnode** head, struct pair p)
     else prev_to_probe->next = new;
 }
 
-struct qnode queue_pop(struct qnode** head)
+struct tnode* queue_pop(struct qnode** head)
 {
     /* Return first element in the queue (highest priority)
-     * and reassign head freeing returned node from the heap */
-    assert(head != NULL && "Trying to pop from an empty queue.");
-    /* Save first node before freeing it */
-    struct qnode nd = **head;
+     * and reassign head freeing node from the heap (the pointer to the
+     * tree node is stil valid and points to occupied memory)*/
+    assert(*head != NULL && "Trying to pop from an empty queue.");
+    /* Save pointer to tree node before freeing the qnode which carries it */
+    struct tnode* tn = (*head)->tn;
+    /* Save poniter to second queue node which will become the head */
     struct qnode* second_node = (*head)->next;
     free(*head);
     *head = second_node;
-    return nd;
-}
-
-/* Struct for priority queue implementation */
-struct tnode {
-    struct tnode *left, *right;
-    struct pair p;
-};
-
-struct tnode* tree_create_node(struct pair p, struct tnode* left, struct tnode* right)
-{
-    /* Create a new node for the huffman tree, leaves don't have childs
-     * so left and right fields are just NULLs */
-    struct tnode* new = malloc(sizeof(struct tnode));
-    assert(new != NULL && "Call to malloc() failed.");
-    new->left = left;
-    new->right = right;
-    new->p = p;
-    return new;
+    return tn;
 }
 
 void count_occurences(size_t occurences[], const char *text)
@@ -85,20 +95,46 @@ void count_occurences(size_t occurences[], const char *text)
     for (size_t i = 0; i < text_len; occurences[(int)text[i++]] += 1);
 }
 
-void encode_alphabet(struct tnode* root, char encodings[][8], char code[8])
+double calculate_entropy(size_t occurences[], const char *text)
+{
+    /* To calculate the entropy of a stream of bytes use the formula:
+     * H = -sum(p_i * log2(p_i)) */
+    size_t text_len = strlen(text);
+    double entropy = .0f;
+    for (size_t i = 0; i < ASCII_SIZE; ++i) {
+        if (occurences[i] > 0) {
+            double probability = (double)occurences[i] / text_len;
+            entropy -= probability * log2(probability);
+        }
+    }
+    return entropy;
+}
+
+double calculate_code_length_avg(char* encodings[ASCII_SIZE], size_t occurences[], size_t total_chars)
+{
+    /* This function compute the weighted avg of the codes length */
+    double weighted_sum = 0.0;
+    for (size_t i = 0; i < ASCII_SIZE; ++i) {
+        if (encodings[i] != NULL) {
+            double probability = (double)occurences[i] / total_chars;
+            weighted_sum += probability * strlen(encodings[i]);
+        }
+    }
+    return weighted_sum;
+}
+
+void encode_alphabet(struct tnode* root, char* encodings[ASCII_SIZE], char* code)
 {
     /* Recursive function for alphabet encoding. This function traverse the 
      * tree reaching the leaves, in the process a string is carried between
      * function calls which keeps track of the current path.
      * In order to build the code for a leaf it is required to traverse
-     * the tree till the leaf and concatenate to code, on each level,
+     * the tree till the leaf and concatenate to the code, on each level,
      * a 1 if right node is next or 0 if left node is next */
-
     if (root->left == NULL && root->right == NULL) {
-        /* The current root is a leaf, save code to
-         * encodings table*/
+        /* The current root is a leaf, save code to encodings table*/
+        encodings[root->p.ch] = malloc(strlen(code) + 1);
         strcpy(encodings[root->p.ch], code);
-        printf("(%c) => %s\n", root->p.ch, code);
         return;
     }
     strcat(code, "0");
@@ -111,119 +147,129 @@ void encode_alphabet(struct tnode* root, char encodings[][8], char code[8])
     code[strlen(code)-1] = '\0';
 }
 
-// void dump_tree(struct tnode* root)
-// {
-//     if (root == NULL) return;
-//     printf("(%c) => %zu\n", root->p.ch, root->p.occ);
-//     dump_tree(root->left);
-//     dump_tree(root->right);
-// }
+size_t compute_max_code_len(struct tnode* root)
+{
+    if (root == NULL) return 0;
+    if (root->left == NULL && root->right == NULL) return 0;
+
+    size_t left_height = compute_max_code_len(root->left);
+    size_t right_height = compute_max_code_len(root->right);
+
+    return 1 + (left_height > right_height ? left_height : right_height);
+}
+
+char* read_content_from_file(const char* file_path)
+{
+    FILE *fp = fopen(file_path, "r");
+    char *text = NULL;
+
+    /* Compute length of file */
+    long length;
+    fseek(fp, 0, SEEK_END);
+    length = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    text = calloc(length + 1, sizeof(char));
+    assert(text != NULL && "Call to malloc() failed.");
+    /* Read lenght bytes from fp, 1 byte at a time
+     * and put the content into text */
+    fread(text, 1, length, fp);
+    fclose(fp);
+    return text;
+}
+
+void free_tree(struct tnode* root)
+{
+    if (root == NULL) return;
+    if (root->left == NULL && root->right == NULL) return free(root);
+    free_tree(root->left);
+    free_tree(root->right);
+    free(root);
+}
+
+void free_encodings(char* encodings[ASCII_SIZE])
+{
+    for (size_t i = 0; i < ASCII_SIZE; ++i) {
+        if (encodings[i] != NULL) {
+            free(encodings[i]);
+        }
+    }
+}
 
 int main(void)
 {
-    size_t occurences[ASCII_SIZE] = {0};
-    const char *text = "AAAAbbCCCddd";
-    // const char *text = "BIG BOB BITES BANANAS";
-    // const char *text = "The quick brown fox jumps over the lazy dog";
-    struct qnode* head = NULL;
+    const char *file_path = "mussolini_speech.txt";
+    const char *text = read_content_from_file(file_path);
 
+    size_t occurences[ASCII_SIZE] = {0};
+    struct qnode* nodes = NULL;
     count_occurences(occurences, text);
-    /* Insert occurences into a priority queue to sort them in 
-    * descending order based on .occ field. This prepares a ds
-    * useful for building the huffman tree */
+
+    /* Insert tree nodes into a priority queue to sort them in 
+    * descending order based on .occ field. Offer a tree node
+    * only if the symbols belong to the text alphabet (.occ > 0).
+    * This operation prepares a priority queue that will be used
+    * to settle the leaves of the huffman tree */
     struct pair p;
     for (size_t i = 0; i < ASCII_SIZE; ++i) {
-        if (occurences[i] != 0) {
+        if (occurences[i] > 0) {
             p = (struct pair) { .ch = i, .occ = occurences[i] };
-            queue_offer(&head, p);
+            struct tnode* tn = tree_create_node(p, NULL, NULL);
+            queue_offer(&nodes, tn);
         }
     }
 
-    struct qnode* probe = head;
-    while (probe != NULL) {
-        printf("(%c) => %zu\n", probe->p.ch, probe->p.occ);
-        probe = probe->next;
+    /* If we didn't managed to put at least one node in the queue, 
+     * then the text input must be empty */
+    if (nodes == NULL) {
+        printf("Text input is empty.\n");
+        return 0;
     }
 
-    /* Dumb stack for managing pending roots */
-    size_t root_stack_index = 0;
-    struct tnode* root_stack[ASCII_SIZE] = {0};
-
-    struct qnode n1, n2;
-    struct tnode *left, *right;
-
-    while (head->next != NULL) {
-        n1 = queue_pop(&head);
-        n2 = queue_pop(&head);
-        /* Offer to queue a new pair which does not carry a character */
-        p = (struct pair) {.ch = -1, .occ = n1.p.occ + n2.p.occ};
-        queue_offer(&head, p);
-
-        // getchar();
-        struct qnode* probe = head;
-        printf("=========================================\n");
-        while (probe != NULL) {
-            printf("(%c) => %zu\n", probe->p.ch, probe->p.occ);
-            probe = probe->next;
-        }
-
-        /* Tree generation for each pair of highest priority nodes.
-         * NOTE: n1.occ is always lower than n2.occ
-         * In the following lines of codes the sequence of instruction
-         * is mandatory in order to create a tree where the right most value
-         * is the lowest. In general, for each node, the value of right child
-         * is lower than the value of left child.
-         *
-         * n2 comes first because when dealing with summed occurences (second
-         * branch of if statement) the popped root from the stack is the sum
-         * of the last two occurences encoutered and it is definetly
-         * the left value (a value greater than right child value)
-
-         * Popped pair is a leaf */
-        if (n2.p.ch != -1) {
-            printf("LEFT: added leaf\n");
-            left = tree_create_node(n2.p, NULL, NULL);
-        }
-        /* Popped pair is a sum of occurences */
-        else {
-            left = root_stack[--root_stack_index];
-            printf("LEFT: added sum (%zu)\n", left->p.occ);
-        }
-
-        if (n1.p.ch != -1) {
-            printf("RIGHT: added leaf\n");
-            right = tree_create_node(n1.p, NULL, NULL);
-        }
-        else {
-            right = root_stack[--root_stack_index];
-            printf("RIGHT: added sum (%zu)\n", right->p.occ);
-        }
-
-        /* Add root to stack.
-         * This operation is required in order to preserve the roots, which will
-         * not be reassigned in the next iteration. A clear example that demonstrate
-         * the utilization of this concept in the algorithm is the following: 
-         * A sequence of pairs where all .occ are equals e.g. a list
-         * of symbols that occurs just one time in the text, in this scenario the algorithm
-         * will continue to add leafs until it reaches the end and so it starts
-         * tying togheter the nodes */
-        root_stack[root_stack_index++] = tree_create_node(p, left, right);
+    /* Build up the huffman tree, pop 2 nodes and offer to the
+     * queue a new node which is the parent of popped nodes,
+     * the parent node carries a .occ which is the sum of child's 
+     * .occ. Continue the process till one node remains in
+     * the queue, the last remaining node is the root of the huffman tree */
+    struct tnode *t1, *t2, *tn;
+    while (nodes->next != NULL) {
+        t1 = queue_pop(&nodes);
+        t2 = queue_pop(&nodes);
+        p = (struct pair) {.ch = -1, .occ = t1->p.occ + t2->p.occ};
+        tn = tree_create_node(p, t1, t2);
+        queue_offer(&nodes, tn);
     }
-    printf("root_stack_index = %zu\n", root_stack_index);
-
-    /* Generate encoding for text alphabet */
-    struct tnode* root = root_stack[0];
-    // printf("(%c) => %zu\n", root->p.ch, root->p.occ);
-    //     printf("(%c) => %zu\n", root->left->p.ch, root->left->p.occ);
-    //         printf("(%c) => %zu\n", root->left->left->p.ch, root->left->left->p.occ);
-    //         printf("(%c) => %zu\n", root->left->right->p.ch, root->left->right->p.occ);
-    //     printf("(%c) => %zu\n", root->right->p.ch, root->right->p.occ);
-    //         printf("(%c) => %zu\n", root->right->left->p.ch, root->right->left->p.occ);
-    //         printf("(%c) => %zu\n", root->right->right->p.ch, root->right->right->p.occ);
 
     /* Generate codes to represents all the symbols in the alphabet */
-    char encodings[ASCII_SIZE][8] = {0};
-    char code[8] = "";
+    struct tnode* root = nodes->tn;
+    size_t max_code_len = compute_max_code_len(root) + 1;
+    char *encodings[ASCII_SIZE] = {0};
+
+    /* Reserve a space memory for keeping track of position in the tree.
+     * the memory must be zeroed, this space will be used for
+     * alphabet encoding which will concatenate a bit or remove the last one
+     * based on the edges path */
+    char *code = calloc(max_code_len, sizeof(char));
     encode_alphabet(root, encodings, code);
+
+    /* Test the effectivness of the encoding */
+    double entropy = calculate_entropy(occurences, text);
+    double length_avg = calculate_code_length_avg(encodings, occurences, strlen(text));
+
+    printf("Length avg: %lf\n", length_avg);
+    printf("Entropy:    %lf\n", entropy);
+
+    double efficiency = entropy / length_avg;
+    printf("Encoding efficiency: %lf%%\n", efficiency * 100);
+
+    /* Verify Shannon theorem */
+    assert(length_avg >= entropy && length_avg < entropy + 1);
+
+    free_tree(root);
+    free_encodings(encodings);
+
+    free((char*)text);
+    free(nodes);
+    free(code);
     return 0;
 }

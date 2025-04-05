@@ -135,6 +135,7 @@ void encode_alphabet(struct tnode* root, char* encodings[ASCII_SIZE], char* code
         /* The current root is a leaf, save code to encodings table*/
         encodings[root->p.ch] = malloc(strlen(code) + 1);
         strcpy(encodings[root->p.ch], code);
+        // printf("%zu\n", strlen(encodings[root->p.ch]));
         return;
     }
     strcat(code, "0");
@@ -149,6 +150,9 @@ void encode_alphabet(struct tnode* root, char* encodings[ASCII_SIZE], char* code
 
 size_t compute_max_code_len(struct tnode* root)
 {
+    /* This function is responsable for the computation of
+     * the code length. It basically find the longest steps required
+     * to get from the root the the farthest leaf */
     if (root == NULL) return 0;
     if (root->left == NULL && root->right == NULL) return 0;
 
@@ -180,6 +184,10 @@ char* read_content_from_file(const char* file_path)
 
 void free_tree(struct tnode* root)
 {
+    /* This function traverses the tree till it found a leaf, it
+     * free the leaf, then it step back and visit all the possible
+     * branches. Once we know that a node is no more needed because 
+     * we visited all of its child than it can be freed */
     if (root == NULL) return;
     if (root->left == NULL && root->right == NULL) return free(root);
     free_tree(root->left);
@@ -189,6 +197,7 @@ void free_tree(struct tnode* root)
 
 void free_encodings(char* encodings[ASCII_SIZE])
 {
+    /* Free the characters that belongs to the alphabet */
     for (size_t i = 0; i < ASCII_SIZE; ++i) {
         if (encodings[i] != NULL) {
             free(encodings[i]);
@@ -219,7 +228,7 @@ int main(void)
         }
     }
 
-    /* If we didn't managed to put at least one node in the queue, 
+    /* If we didn't managed to put at least one node in the queue,
      * then the text input must be empty */
     if (nodes == NULL) {
         printf("Text input is empty.\n");
@@ -245,7 +254,7 @@ int main(void)
     size_t max_code_len = compute_max_code_len(root) + 1;
     char *encodings[ASCII_SIZE] = {0};
 
-    /* Reserve a space memory for keeping track of position in the tree.
+    /* Reserve a memory space for keeping track of position in the tree.
      * the memory must be zeroed, this space will be used for
      * alphabet encoding which will concatenate a bit or remove the last one
      * based on the edges path */
@@ -254,7 +263,8 @@ int main(void)
 
     /* Test the effectivness of the encoding */
     double entropy = calculate_entropy(occurences, text);
-    double length_avg = calculate_code_length_avg(encodings, occurences, strlen(text));
+    size_t text_len = strlen(text);
+    double length_avg = calculate_code_length_avg(encodings, occurences, text_len);
 
     printf("Length avg: %lf\n", length_avg);
     printf("Entropy:    %lf\n", entropy);
@@ -265,6 +275,12 @@ int main(void)
     /* Verify Shannon theorem */
     assert(length_avg >= entropy && length_avg < entropy + 1);
 
+    for (size_t i = 0; i < text_len; ++i) {
+        printf("%c => %s\n", text[i], encodings[text[i]]);
+        size_t code_len = strlen(encodings[text[i]]);
+    }
+
+    /* Free shit out */
     free_tree(root);
     free_encodings(encodings);
 

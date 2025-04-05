@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -205,6 +206,40 @@ void free_encodings(char* encodings[ASCII_SIZE])
     }
 }
 
+void write_byte(FILE *fp, char *buffer, size_t *b)
+{
+    size_t i;
+    int byte = 0;
+    printf("Writing ");
+    for (i = 0; i < 8; ++i) {
+        printf("%c", buffer[i]);
+        byte |= ((int)(buffer[i] - 48) << (7-i));
+    }
+    printf("\n");
+    fputc(byte, fp);
+
+    /* Shift remaining bits by 8 position */
+    for (i = 8; buffer[i] != '\0'; ++i) buffer[i-8] = buffer[i];
+    buffer[i-8] = '\0';
+    *b -= 8;
+}
+
+void push_byte(char byte, char *buffer, size_t *b)
+{
+    /* Iterate through byte, obtain bits and push them to the buffer */
+    size_t i;
+    size_t bit_position;
+    char bit;
+
+    for (i = (*b); i < *b + 8; ++i) {
+        bit_position = 7 - (i - (*b));
+        bit = ((byte >> bit_position) & 1) + 48;
+        buffer[i] = bit;
+    }
+    buffer[i] = '\0';
+    *b += 8;
+}
+
 int main(void)
 {
     const char *file_path = "mussolini_speech.txt";
@@ -220,11 +255,13 @@ int main(void)
     * This operation prepares a priority queue that will be used
     * to settle the leaves of the huffman tree */
     struct pair p;
+    size_t alphabet_size = 0;
     for (size_t i = 0; i < ASCII_SIZE; ++i) {
         if (occurences[i] > 0) {
             p = (struct pair) { .ch = i, .occ = occurences[i] };
             struct tnode* tn = tree_create_node(p, NULL, NULL);
             queue_offer(&nodes, tn);
+            alphabet_size++;
         }
     }
 
@@ -275,15 +312,61 @@ int main(void)
     /* Verify Shannon theorem */
     assert(length_avg >= entropy && length_avg < entropy + 1);
 
-    for (size_t i = 0; i < text_len; ++i) {
-        printf("%c => %s\n", text[i], encodings[text[i]]);
-        size_t code_len = strlen(encodings[text[i]]);
+    FILE *fp = fopen("comp", "wb");
+    assert(fp != NULL && "Unable to open file for writing");
+
+    /* Fill the buffer with the sequence of bits that will be
+     * written to the binary file. For this implementation
+     * each bit occupies an entire byte 
+     * WARNING: allocated size take into account that for
+     * each time you push something to the buffer, then
+     * you write most bytes by consuming the just added bits */
+    size_t b = 0;
+    char* buffer = calloc(ASCII_SIZE, sizeof(char));
+
+    /* push the alphabet_size */
+    push_byte((char)alphabet_size, buffer, &b);
+    /* write the entire alphabet in the following format: 
+     * <character><code_len><code>
+     * ^ 8 bit    ^ 8 bit   ^ code_len bit*/
+    for (size_t i = 0; i < ASCII_SIZE; ++i) {
+        if (encodings[i] != NULL) {
+
+            push_byte((char)i, buffer, &b);
+
+            /* code_len is the number of bit required to store the code */
+            int code_len = strlen(encodings[i]);
+            push_byte((char)code_len, buffer, &b);
+
+            strcat(buffer, encodings[i]);
+            b += code_len;
+            while (b >= 8) write_byte(fp, buffer, &b);
+        }
     }
+
+    /* Proceed to write the encoded text using the
+     * encodings table, keep in mind to write
+     * bytes every once in a while in order to
+     * prevet reaching the limit size for the buffer */
+    for (size_t i = 0; i < text_len; ++i) {
+        strcat(buffer, encodings[text[i]]);
+        b += strlen(encodings[text[i]]);
+        while (b >= 8) write_byte(fp, buffer, &b);
+    }
+
+    /* Make sure to write remaining bits */
+    while (b < 8) buffer[b++] = '0';
+    buffer[b] = '\0';
+    while (b >= 8) write_byte(fp, buffer, &b);
+    assert(b == 0 && strlen(buffer) == 0);
+
+    fclose(fp);
 
     /* Free shit out */
     free_tree(root);
     free_encodings(encodings);
 
+    free(buffer);
     free((char*)text);
     free(nodes);
     free(code);

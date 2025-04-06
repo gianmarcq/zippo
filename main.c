@@ -166,6 +166,7 @@ size_t compute_max_code_len(struct tnode* root)
 char* read_content_from_file(const char* file_path)
 {
     FILE *fp = fopen(file_path, "r");
+    if (fp == NULL) return NULL;
     char *text = NULL;
 
     /* Compute length of file */
@@ -175,7 +176,7 @@ char* read_content_from_file(const char* file_path)
     fseek(fp, 0, SEEK_SET);
 
     text = calloc(length + 1, sizeof(char));
-    assert(text != NULL && "Call to malloc() failed.");
+    if (text == NULL) return NULL;
     /* Read lenght bytes from fp, 1 byte at a time
      * and put the content into text */
     fread(text, 1, length, fp);
@@ -210,12 +211,9 @@ void write_byte(FILE *fp, char *buffer, size_t *b)
 {
     size_t i;
     int byte = 0;
-    printf("Writing ");
     for (i = 0; i < 8; ++i) {
-        printf("%c", buffer[i]);
         byte |= ((int)(buffer[i] - 48) << (7-i));
     }
-    printf("\n");
     fputc(byte, fp);
 
     /* Shift remaining bits by 8 position */
@@ -240,38 +238,37 @@ void push_byte(char byte, char *buffer, size_t *b)
     *b += 8;
 }
 
-int main(void)
+struct qnode* create_alphabet(const char *text, size_t occurences[ASCII_SIZE])
 {
-    const char *file_path = "mussolini_speech.txt";
-    const char *text = read_content_from_file(file_path);
-
-    size_t occurences[ASCII_SIZE] = {0};
     struct qnode* nodes = NULL;
-    count_occurences(occurences, text);
-
     /* Insert tree nodes into a priority queue to sort them in 
     * descending order based on .occ field. Offer a tree node
     * only if the symbols belong to the text alphabet (.occ > 0).
     * This operation prepares a priority queue that will be used
     * to settle the leaves of the huffman tree */
     struct pair p;
-    size_t alphabet_size = 0;
     for (size_t i = 0; i < ASCII_SIZE; ++i) {
         if (occurences[i] > 0) {
             p = (struct pair) { .ch = i, .occ = occurences[i] };
             struct tnode* tn = tree_create_node(p, NULL, NULL);
             queue_offer(&nodes, tn);
-            alphabet_size++;
         }
     }
 
-    /* If we didn't managed to put at least one node in the queue,
-     * then the text input must be empty */
-    if (nodes == NULL) {
-        printf("Text input is empty.\n");
-        return 0;
-    }
+    return nodes;
+}
 
+size_t get_alphabet_size(size_t occurences[ASCII_SIZE])
+{
+    size_t alphabet_size = 0;
+    for (size_t i = 0; i < ASCII_SIZE; ++i) {
+        if (occurences[i] > 0) alphabet_size++;
+    }
+    return alphabet_size;
+}
+
+struct tnode* build_tree(struct qnode* nodes)
+{
     /* Build up the huffman tree, pop 2 nodes and offer to the
      * queue a new node which is the parent of popped nodes,
      * the parent node carries a .occ which is the sum of child's 
@@ -285,11 +282,14 @@ int main(void)
         tn = tree_create_node(p, t1, t2);
         queue_offer(&nodes, tn);
     }
-
-    /* Generate codes to represents all the symbols in the alphabet */
     struct tnode* root = nodes->tn;
+    free(nodes);
+    return root;
+}
+
+void generate_encodings(char* encodings[ASCII_SIZE], struct tnode *root) {
+    /* Generate codes to represents all the symbols in the alphabet */
     size_t max_code_len = compute_max_code_len(root) + 1;
-    char *encodings[ASCII_SIZE] = {0};
 
     /* Reserve a memory space for keeping track of position in the tree.
      * the memory must be zeroed, this space will be used for
@@ -297,7 +297,11 @@ int main(void)
      * based on the edges path */
     char *code = calloc(max_code_len, sizeof(char));
     encode_alphabet(root, encodings, code);
+    free(code);
+}
 
+void dump_analytics(char *encodings[ASCII_SIZE], size_t occurences[ASCII_SIZE], const char *text)
+{
     /* Test the effectivness of the encoding */
     double entropy = calculate_entropy(occurences, text);
     size_t text_len = strlen(text);
@@ -311,8 +315,11 @@ int main(void)
 
     /* Verify Shannon theorem */
     assert(length_avg >= entropy && length_avg < entropy + 1);
+}
 
-    FILE *fp = fopen("comp", "wb");
+size_t write_encoded_text(const char *file_path, char *encodings[ASCII_SIZE], const char *text, size_t alphabet_size)
+{
+    FILE *fp = fopen(file_path, "wb");
     assert(fp != NULL && "Unable to open file for writing");
 
     /* Fill the buffer with the sequence of bits that will be
@@ -322,8 +329,11 @@ int main(void)
      * each time you push something to the buffer, then
      * you write most bytes by consuming the just added bits */
     size_t b = 0;
+    size_t written_bytes = 0;
     char* buffer = calloc(ASCII_SIZE, sizeof(char));
 
+    /* push the magic number */
+    push_byte((char)69, buffer, &b);
     /* push the alphabet_size */
     push_byte((char)alphabet_size, buffer, &b);
     /* write the entire alphabet in the following format: 
@@ -340,7 +350,10 @@ int main(void)
 
             strcat(buffer, encodings[i]);
             b += code_len;
-            while (b >= 8) write_byte(fp, buffer, &b);
+            while (b >= 8) {
+                write_byte(fp, buffer, &b);
+                written_bytes++;
+            }
         }
     }
 
@@ -348,27 +361,111 @@ int main(void)
      * encodings table, keep in mind to write
      * bytes every once in a while in order to
      * prevet reaching the limit size for the buffer */
+    size_t text_len = strlen(text);
     for (size_t i = 0; i < text_len; ++i) {
         strcat(buffer, encodings[text[i]]);
         b += strlen(encodings[text[i]]);
-        while (b >= 8) write_byte(fp, buffer, &b);
+        while (b >= 8) {
+            write_byte(fp, buffer, &b);
+            written_bytes++;
+        }
     }
 
     /* Make sure to write remaining bits */
     while (b < 8) buffer[b++] = '0';
     buffer[b] = '\0';
-    while (b >= 8) write_byte(fp, buffer, &b);
+    while (b >= 8) {
+        write_byte(fp, buffer, &b);
+        written_bytes++;
+    }
     assert(b == 0 && strlen(buffer) == 0);
 
+    free(buffer);
     fclose(fp);
 
-    /* Free shit out */
-    free_tree(root);
-    free_encodings(encodings);
+    return written_bytes;
+}
 
-    free(buffer);
-    free((char*)text);
-    free(nodes);
-    free(code);
+#define USAGE "Usage: hufcomp c/d <file_path>\n"
+
+int main(int argc, char **argv)
+{
+    if (argc == 1) {
+        fprintf(stderr, "ERROR: Invalid usage.\n"USAGE);
+        return 1;
+    } else if (argc == 2) {
+        if (strlen(argv[1]) == 1)
+            fprintf(stderr, "ERROR: File path not provided.\n"USAGE);
+        else fprintf(stderr, "ERROR: Missing command.\n"USAGE);
+        return 1;
+    } else if (strlen(argv[1]) != 1) {
+        fprintf(stderr, "ERROR: Invalid command %s.\n"USAGE, argv[1]);
+        return 1;
+    }
+
+    const char *file_path = argv[2];
+    const char *text = read_content_from_file(file_path);
+    if (text == NULL) {
+        fprintf(stderr, "ERROR: Unable to open '%s'.\n"USAGE, file_path);
+        return 1;
+    }
+
+    switch (argv[1][0]) {
+        case 'c':
+            {
+                printf("Starting compression...\n");
+                size_t occurences[ASCII_SIZE] = {0};
+                count_occurences(occurences, text);
+                struct qnode* nodes = create_alphabet(text, occurences);
+                /* If we didn't managed to put at least one node in the queue,
+                 * then the text input must be empty */
+                if (nodes == NULL) {
+                    printf("Input text is empty.\n");
+                    return 0;
+                }
+
+                printf("Building huffman tree...\n");
+                struct tnode *root = build_tree(nodes);
+                char *encodings[ASCII_SIZE] = {0};
+                generate_encodings(encodings, root);
+                dump_analytics(encodings, occurences, text);
+
+                /* Build compressed file path prepending a 'z' to file_path name,
+                 * must distinguish two cases: file name and file path */
+                char *comp_file_path = calloc(strlen(file_path)+2, sizeof(char));
+                strcpy(comp_file_path, file_path);
+                size_t i = strlen(file_path)-1;
+                while (i != 0 && file_path[i] != '/') i--;
+                /* prepend 'z' to file name */
+                size_t j = strlen(comp_file_path);
+                comp_file_path[j+1] = '\0';
+                while (j > i) {
+                    comp_file_path[j] = comp_file_path[j-1];
+                    j--;
+                }
+                if (i == 0) comp_file_path[i] = 'z';
+                else comp_file_path[i+1] = 'z';
+
+                printf("Writing to '%s'...\n", comp_file_path);
+                size_t alphabet_size = get_alphabet_size(occurences);
+                size_t written_bytes = write_encoded_text(comp_file_path, encodings, text, alphabet_size);
+                printf("Done... %zu bytes written\n", written_bytes);
+
+                /* Free shit out */
+                free_tree(root);
+                free_encodings(encodings);
+
+                free((char*)text);
+                free(comp_file_path);
+            }
+            break;
+        case 'd':
+            break;
+        default:
+            fprintf(stderr, "ERROR: Invalid command.\n"USAGE);
+            return 1;
+
+    }
+
     return 0;
 }

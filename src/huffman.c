@@ -44,6 +44,8 @@ static i32 TNodeCmp(const void *a, const void *b) {
     return nodeA->freq - nodeB->freq;
 }
 
+/* Populate the priority queue directly with nodes of
+ * the huffman tree */
 static Heap fillHeap(u64 freq[]) {
     Heap heap = HeapInit(ALPHABET_SIZE, TNodeCmp);
     for (u16 c = 0; c < ALPHABET_SIZE; c++) {
@@ -54,7 +56,14 @@ static Heap fillHeap(u64 freq[]) {
     return heap;
 }
 
+/* Build an Huffman tree starting from a priority queue.
+ * This function implements the notorius algorithm for
+ * the Huffman tree building */
 static HuffmanTree HuffmanTreeBuild(Heap heap) {
+    /* Handle edge-case: there is a single symbol
+     * in the input file that correspond to a single
+     * node in the tree, which is invalidating
+     * general logic. */
     if (HeapSize(heap) == 1) {
         TLink node = HeapPop(heap);
         u8 dummy_sym = (node->sym == 0) ? 1 : 0;
@@ -69,10 +78,12 @@ static HuffmanTree HuffmanTreeBuild(Heap heap) {
         TLink z = TNodeInit(0, x->freq + y->freq, x, y);
         HeapPush(heap, z);
     }
+
     HuffmanTree tree = { .root = HeapPop(heap), .encodings = calloc(ALPHABET_SIZE, sizeof(Encoding))};
     return tree;
 }
 
+/* Free a generic binary tree */
 static void freeTree(TLink root) {
     if (root == NULL) return;
     freeTree(root->left);
@@ -85,6 +96,9 @@ static void HuffmanTreeDestroy(HuffmanTree tree) {
     free(tree.encodings);
 }
 
+/* Generate encodings by traversing the Huffman tree:
+ * label each left branch with zeros and each right branch
+ * with ones. Save bit sequence formulated when arriving to a leaf */
 static void encodingsGenerationR(TLink root, Encoding *encs, u64 code, u8 depth) {
     if (root->left == NULL && root->right == NULL) {
         encs[root->sym] = (Encoding) {.code = code, .length = depth};
@@ -114,6 +128,9 @@ static void dumpEncodings(HuffmanTree tree, u64 freq[ALPHABET_SIZE]) {
     free(code);
 }
 
+/* Serialize the Huffman tree by traversing it in pre-order
+ * and writing to file its topology. When encountering a leaf
+ * save the symbol associated */
 static void writeTreeR(BitWriter *bw, TLink root) {
     if (root == NULL) return;
     if (root->left == NULL && root->right == NULL) {
@@ -130,12 +147,13 @@ static void writeSerializedHuffmanTree(BitWriter *bw, HuffmanTree tree) {
     writeTreeR(bw, tree.root);
 }
 
+/* Write bits to out following the binary format */
 static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, const char *out) {
     BitWriter bw = { .file = fopen(out, "wb") };
     if (bw.file == NULL) SYS_ERROR("fopen");
 
     BitWriterWrite(&bw, MAGIC_NUMBER, 8 * 4);
-    BitWriterWrite64(&bw, fsize);
+    BitWriterWrite64(&bw, fsize); // Original file size
     writeSerializedHuffmanTree(&bw, tree);
 
     for (u64 i = 0; i < fim.size; i++) {
@@ -166,6 +184,8 @@ void encode(const char *path_in, const char *path_out) {
     HuffmanTreeDestroy(tree);
 }
 
+/* Deserialize the Huffman tree and rebuild it
+ * node by node */
 static TLink readTreeR(BitReader *br) {
     u64 bit = BitReaderRead(br, 1);
     if (bit == 1) {
@@ -187,6 +207,10 @@ static void writeDecompressedFile(BitReader *br, HuffmanTree tree, u64 target_si
 
     TLink curr = tree.root;
 
+    /* Decoding happens by leveraging prefix-free property
+     * of the Huffman codes. Traverse the tree by keeping track of
+     * the bit sequence formulated till you encounter a leaf,
+     * there you know you've decoded a symbol */
     while (target_size > 0) {
         curr = BitReaderRead(br, 1) == 0 ? curr->left : curr->right;
         if (curr->left == NULL && curr->right == NULL) {

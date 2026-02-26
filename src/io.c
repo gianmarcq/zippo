@@ -10,6 +10,8 @@ FileInMemory FIMInit(const char *filepath) {
     if (fstat(fim.fd, &info) == -1) SYS_ERROR("fstat");
     fim.size = info.st_size;
 
+    /* Handle edge-case: an emtpy file would cause
+     * segfault on reading attempt */
     if (fim.size == 0) {
         APP_ERROR("%s is Empty, Nothing to Do", filepath);
     }
@@ -64,6 +66,8 @@ void BitWriterWrite(BitWriter *bw, u64 code, u8 length) {
     }
 }
 
+/* Write final bits stored in the buffer, no
+ * need for manual padding */
 void BitWriterFlush(BitWriter *bw) {
     if (bw->used > 0) {
         u8 byte = bw->buffer & 0xFF;
@@ -73,6 +77,10 @@ void BitWriterFlush(BitWriter *bw) {
     writeInterbuf(bw);
 }
 
+/* This function extract bytes from the file
+ * in order to fullfill the bits request.
+ * Pending bits are stored in buffer, a
+ * <length> number of bits is returned */
 u64 BitReaderRead(BitReader *br, u8 length) {
     assert(length <= 56);
     while (br->available < length) {

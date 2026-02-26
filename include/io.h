@@ -2,7 +2,6 @@
 #define IO_H
 
 #include "common.h"
-#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -20,7 +19,6 @@ typedef struct {
 FileInMemory FIMInit(const char *filepath);
 void FIMDestroy(FileInMemory fim);
 
-
 #define INTERBUF_SIZE 512
 #define BIGBUF_SIZE INTERBUF_SIZE * 4
 
@@ -28,6 +26,8 @@ typedef struct {
     FILE *file;
     u64 buffer;
     u8 used;
+    /* The intermediate buffer is used to
+     * reduce the number of syscalls */
     struct {
         u8 b[INTERBUF_SIZE];
         u16 size;
@@ -42,9 +42,9 @@ void StringFromBits(char *s, u64 buf, u8 len);
 
 typedef struct {
     FileInMemory *fim;
-    u64 pos;
+    u64 pos;      // position in file
     u64 buffer;
-    u8 available;
+    u8 available; // bits to consume
 } BitReader;
 
 u64 BitReaderRead(BitReader *br, u8 length);

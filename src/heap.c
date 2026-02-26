@@ -27,11 +27,14 @@ void HeapDestroy(Heap heap) {
 }
 
 void HeapPush(Heap heap, void *element) {
+    /* The array is dynamically reallocated based on user needs */
     if (heap->size == heap->capacity) {
         heap->capacity *= 2;
         heap->data = realloc(heap->data, sizeof(*heap->data) * heap->capacity);
         if (heap->data == NULL) SYS_ERROR("realloc");
     }
+    /* When inserting an element the Fix-Up logic allows to
+     * mantain the functional property of the Heap */
     u64 i = heap->size;
     while (i > 0 && heap->cmp(element, heap->data[PARENT(i)]) < 0) {
         heap->data[i] = heap->data[PARENT(i)];
@@ -46,9 +49,11 @@ void* HeapPop(Heap heap) {
     void *min = heap->data[0];
     heap->size--;
 
+    /* submin is the new root after deletion */
     void *submin = heap->data[heap->size];
     u64 i = 0, child;
 
+    /* Implementation of the Fix-Down logic */
     while (LEFT(i) < heap->size) {
         child = LEFT(i);
         if (RIGHT(i) < heap->size && heap->cmp(heap->data[RIGHT(i)], heap->data[child]) < 0) {

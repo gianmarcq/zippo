@@ -15,6 +15,8 @@ static void print_help(const char *prog_name) {
 }
 
 int main(int argc, char **argv) {
+    /* If the program is called with no arguments then
+     * print the help message end exit */
     if (argc == 1) {
         print_help(argv[0]);
         return 0;
@@ -25,6 +27,8 @@ int main(int argc, char **argv) {
         u8 comp, dec;
     } state = {0};
 
+    /* struct option array for flags definition,
+     * see: man getopt_long */
     struct option longopts[] = {
         { "compress",   no_argument,       0, 'c' },
         { "decompress", no_argument,       0, 'd' },
@@ -48,6 +52,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Not every arguments has been parsed, it means there is
+     * some garbage in argv */
     if (optind < argc) {
         APP_ERROR("Invalid argument: %s", argv[optind]);
     }

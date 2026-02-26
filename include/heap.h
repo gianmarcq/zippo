@@ -2,7 +2,6 @@
 #define HEAP_H
 
 #include "common.h"
-#include <stdlib.h>
 
 typedef struct heap *Heap;
 

@@ -7,9 +7,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define BITSET(buf, i)   ((buf) |= (1ULL << (i)))
-#define BITUNSET(buf, i) ((buf) &= ~(1ULL << (i)))
-
 typedef struct {
     u8 *data;
     u64 size;
@@ -21,6 +18,9 @@ void FIMDestroy(FileInMemory fim);
 
 #define INTERBUF_SIZE 512
 #define BIGBUF_SIZE INTERBUF_SIZE * 4
+
+#define BITSET(buf, i)   ((buf) |= (1ULL << (i)))
+#define BITUNSET(buf, i) ((buf) &= ~(1ULL << (i)))
 
 typedef struct {
     FILE *file;

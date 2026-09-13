@@ -16,8 +16,7 @@ typedef struct {
 FileInMemory FIMInit(const char *filepath);
 void FIMDestroy(FileInMemory fim);
 
-#define INTERBUF_SIZE 512
-#define BIGBUF_SIZE INTERBUF_SIZE * 4
+#define INTERBUF_SIZE (32 * 1024) // 32 Kb
 
 #define BITSET(buf, i)   ((buf) |= (1ULL << (i)))
 #define BITUNSET(buf, i) ((buf) &= ~(1ULL << (i)))

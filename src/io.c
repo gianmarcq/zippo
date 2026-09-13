@@ -1,23 +1,24 @@
 #include "io.h"
+#include "common.h"
 #include <assert.h>
 
 FileInMemory FIMInit(const char *filepath) {
     FileInMemory fim = {NULL, 0, -1};
     fim.fd = open(filepath, O_RDONLY);
-    if (fim.fd == -1) SYS_ERROR("open");
+    if (fim.fd == -1) handle_sys_error("open");
 
+    /* Retrieve information about the file pointed
+     * by fim.fd (number of bytes, ...) */
     struct stat info;
-    if (fstat(fim.fd, &info) == -1) SYS_ERROR("fstat");
+    if (fstat(fim.fd, &info) == -1) handle_sys_error("fstat");
     fim.size = info.st_size;
 
     /* Handle edge-case: an emtpy file would cause
      * segfault on reading attempt */
-    if (fim.size == 0) {
-        APP_ERROR("%s is Empty, Nothing to Do", filepath);
-    }
+    if (fim.size == 0) handle_user_error("%s is Empty, Nothing to Do", filepath);
 
     fim.data = mmap(NULL, fim.size, PROT_READ, MAP_PRIVATE, fim.fd, 0);
-    if (fim.data == MAP_FAILED) SYS_ERROR("mmap");
+    if (fim.data == MAP_FAILED) handle_sys_error("mmap");
     return fim;
 }
 
@@ -55,14 +56,22 @@ void BitWriterWrite(BitWriter *bw, u64 code, u8 length) {
     bw->buffer |= code << bw->used;
     bw->used += length;
 
-    while (bw->used >= 8) {
-        u8 byte = bw->buffer & (0xFF);
-        bw->interbuf.b[bw->interbuf.size++] = byte;
+    while (bw->used >= 32) {
+        // write byte after byte (slower)
+        // u8 byte = bw->buffer & (0xFF);
+        // bw->interbuf.b[bw->interbuf.size++] = byte;
+
+        bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer);
+        bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 8);
+        bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 16);
+        bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 24);
+
         if (bw->interbuf.size == INTERBUF_SIZE) {
             writeInterbuf(bw);
         }
-        bw->buffer >>= 8;
-        bw->used -= 8;
+
+        bw->buffer >>= 32;
+        bw->used -= 32;
     }
 }
 

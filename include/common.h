@@ -20,14 +20,14 @@ inline void raiseError(const char *s) {
     exit(1);
 }
 
-#define SYS_ERROR(s) do { \
+#define handle_user_error(fmt, ...) do { \
+    fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__); \
+    exit(EXIT_FAILURE); \
+} while (0)
+
+#define handle_sys_error(s) do { \
     fprintf(stderr, "[ERROR] %s:%d\n", __FILE__, __LINE__); \
     perror(s); \
-    exit(EXIT_FAILURE); \
-} while(0)
-
-#define APP_ERROR(fmt, ...) do { \
-    fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__); \
     exit(EXIT_FAILURE); \
 } while(0)
 

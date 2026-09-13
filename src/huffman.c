@@ -2,6 +2,9 @@
 #include "common.h"
 #include "heap.h"
 #include "io.h"
+#include <assert.h>
+#include <pthread.h>
+#include <stdlib.h>
 
 #define ALPHABET_SIZE 256
 
@@ -22,11 +25,57 @@ typedef struct {
     Encoding *encodings;
 } HuffmanTree;
 
-static void countFrequencies(u64 freq[], const u8 *data, u64 size) {
-    for (u64 i = 0; i < size; i++) {
-        u8 byte = data[i];
-        freq[byte]++;
+#define NTH 4
+typedef struct {
+    const u8 *data;
+    u8 id;
+    pthread_t t;
+    u64 start, end;
+    u64 freq[ALPHABET_SIZE];
+} Thread;
+
+void* countFreqFromStartToEnd(void *arg) {
+    Thread *th = (Thread*) arg;
+    const u8 *data = th->data;
+    u64 *local_freq = th->freq;
+    u8 byte;
+
+    for (u64 i = th->start; i < th->end; i++) {
+        byte = data[i];
+        local_freq[byte]++;
     }
+    return 0;
+}
+
+static void countFrequencies(u64 freq[], const u8 *data, u64 size) {
+    int s;
+    Thread *ths = calloc(NTH, sizeof(*ths));
+    for (u8 i = 0; i < NTH; i++) {
+
+        ths[i].id = i + 1;
+        ths[i].data = data;
+        ths[i].start = (size / NTH) * i;
+        if (i == NTH - 1) ths[i].end = size;
+        else ths[i].end = ths[i].start + (size / NTH);
+
+        s = pthread_create(&ths[i].t, NULL, countFreqFromStartToEnd, ths + i);
+        if (s != 0) handle_sys_error("pthread_create");
+    }
+
+    for (u8 i = 0; i < NTH; i++) {
+        s = pthread_join(ths[i].t, NULL);
+        if (s != 0) handle_sys_error("pthread_join");
+
+    }
+
+    // join partial result into freq array
+    for (u8 i = 0; i < NTH; i++) {
+        for (u16 c = 0; c < ALPHABET_SIZE; c++) {
+            freq[c] += ths[i].freq[c];
+        }
+    }
+
+    free(ths);
 }
 
 static TLink TNodeInit(u8 sym, u64 freq, TLink left, TLink right) {
@@ -128,6 +177,14 @@ static void dumpEncodings(HuffmanTree tree, u64 freq[ALPHABET_SIZE]) {
     free(code);
 }
 
+static void dumpRelativeFrequencies(u64 *freq, u64 size) {
+    for (u64 i = 0; i < ALPHABET_SIZE; i++) {
+        if (freq[i] > 0) {
+            printf("%c: %f\n", (char) i, (float) freq[i] / size * 100.f);
+        }
+    }
+}
+
 /* Serialize the Huffman tree by traversing it in pre-order
  * and writing to file its topology. When encountering a leaf
  * save the symbol associated */
@@ -150,7 +207,7 @@ static void writeSerializedHuffmanTree(BitWriter *bw, HuffmanTree tree) {
 /* Write bits to out following the binary format */
 static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, const char *out) {
     BitWriter bw = { .file = fopen(out, "wb") };
-    if (bw.file == NULL) SYS_ERROR("fopen");
+    if (bw.file == NULL) handle_sys_error("fopen");
 
     BitWriterWrite(&bw, MAGIC_NUMBER, 8 * 4);
     BitWriterWrite64(&bw, fsize); // Original file size
@@ -164,19 +221,28 @@ static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, c
     }
 
     BitWriterFlush(&bw);
-
     fclose(bw.file);
 }
 
 void encode(const char *path_in, const char *path_out) {
     FileInMemory fim = FIMInit(path_in);
     u64 freq[ALPHABET_SIZE] = {0};
+
+    /* Step 1: Count symbol frequencies */
     countFrequencies(freq, fim.data, fim.size);
 
+    /* Step 2: Symbols gets inserted into a Min Heap
+     * defining symbol order based on frequence */
     Heap heap = fillHeap(freq);
+
+    /* Step 3: Build the Huffman tree given the heap */
     HuffmanTree tree = HuffmanTreeBuild(heap);
+
+    /* Step 4: Compute codes for symbols by traversing the tree
+     * and getting to the leaves (actual symbols) */
     HuffmanTreeGenerateEncodings(tree);
 
+    /* Step 5: Write binary file following */
     writeCompressedFile(fim, tree, fim.size, path_out);
 
     HeapDestroy(heap);
@@ -228,13 +294,14 @@ static void writeDecompressedFile(BitReader *br, HuffmanTree tree, u64 target_si
 void decode(const char *path_in, const char *path_out) {
     FileInMemory fim = FIMInit(path_in);
     BitReader br = { .fim = &fim };
+
     u64 magic_number = BitReaderRead(&br, 32);
     if (magic_number != MAGIC_NUMBER) {
-        APP_ERROR("Corrupted file: Magic Number does not match");
+        handle_user_error("Corrupted file: Magic Number does not match");
     }
 
     u64 target_size = BitReaderRead64(&br);
-    if (target_size == 0) APP_ERROR("Nothing to decompress: Original file size is zero");
+    if (target_size == 0) handle_user_error("Nothing to decompress: Original file size is zero");
 
     HuffmanTree tree = readSerializedHuffmanTree(&br);
     writeDecompressedFile(&br, tree, target_size,path_out);

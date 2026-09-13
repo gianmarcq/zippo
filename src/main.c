@@ -1,50 +1,72 @@
-#include <getopt.h>
 #include "common.h"
 #include "huffman.h"
-#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+typedef struct {
+    char *prg_name;
+    char *in, *out;
+    char mode;
+    u8 threads;
+} cli_state;
 
 static void print_help(const char *prog_name);
-static char* consume_arg(int *argc, char ***argv) {
-    char *arg = *argv[0];
-    (*argc)--;
-    (*argv)++;
-    return arg;
-}
+static void print_cli_state(cli_state cs);
 
 int main(int argc, char **argv) {
-    if (argc == 1) {
-        print_help(argv[0]);
-        return 0;
+    cli_state cs = {0};
+    cs.prg_name = argv[0];
+
+    i32 opt;
+    // Enforce POSIX behaviour with "+"
+    while ((opt = getopt(argc, argv, "+cdj:")) != -1) {
+        switch (opt) {
+            case 'c':
+            case 'd':
+                if (cs.mode != 0) {
+                    handle_user_error("Mode already specified");
+                    return EXIT_FAILURE;
+                }
+                cs.mode = opt;
+                break;
+            case 'j':
+                cs.threads = atoi(optarg);
+                if (cs.threads < 1) cs.threads = 1;
+                break;
+            default:
+                handle_user_error("Invalid argument '%s'", optarg);
+                print_help(cs.prg_name);
+                return EXIT_FAILURE;
+        }
     }
 
-    struct {
-        char *executable;
-        char *input, *output;
-        u8 comp, dec;
-    } cli_state = {0};
+    if (cs.mode == 0 || argc - optind != 2) {
+        print_help(cs.prg_name);
+        return EXIT_FAILURE;
+    }
 
-    cli_state.executable = consume_arg(&argc, &argv);
-    char *cmd = consume_arg(&argc, &argv);
-    if (strcmp(cmd, "c") == 0) cli_state.comp = 1;
-    else if (strcmp(cmd, "d") == 0) cli_state.dec = 1;
-    else handle_user_error("Invalid command: %s\n", cmd);
+    cs.in = argv[optind];
+    cs.out = argv[optind + 1];
 
-    if (argc < 2) handle_user_error("Provide input and output file");
-    if (argc > 2) handle_user_error("Illegal arguments");
-    cli_state.input = consume_arg(&argc, &argv);
-    cli_state.output = consume_arg(&argc, &argv);
+    if (cs.mode == 'c') encode(cs.in, cs.out);
+    else if (cs.mode == 'd') decode(cs.in, cs.out);
 
-    if (cli_state.comp) encode(cli_state.input, cli_state.output);
-    else if (cli_state.dec) decode(cli_state.input, cli_state.output);
-
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 void print_help(const char *prog_name) {
     printf("Zippo - File Compressor\n");
-    printf("Usage: %s [CMD] <input> <output>\n", prog_name);
-    printf("Commands:\n");
-    printf("  c, Compress\n");
-    printf("  d, Decompress\n");
-    printf("  h, Show this message\n");
+    printf("Usage: %s <opts> <input> <output>\n", prog_name);
+    printf("Options:\n");
+    printf("  -c,       Compress\n");
+    printf("  -d,       Decompress\n");
+    printf("  -j <arg>, Specify thread count\n");
+}
+
+void print_cli_state(cli_state cs) {
+    printf("Program name: %s\n", cs.prg_name);
+    printf("Input file:   %s\n", cs.in);
+    printf("Output file:  %s\n", cs.out);
+    printf("Mode:         %c\n", cs.mode);
+    printf("Threads:      %d\n", cs.threads);
 }

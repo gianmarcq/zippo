@@ -20,7 +20,7 @@ void FIMDestroy(FileInMemory fim);
 #define BITUNSET(buf, i) ((buf) &= ~(1ULL << (i)))
 
 typedef struct {
-    FILE *file;
+    FILE *sink;
     u64 buffer;
     u8 used;
     /* The intermediate buffer is used to
@@ -32,7 +32,7 @@ typedef struct {
     } interbuf;
 } BitWriter;
 
-void BitWriterInit(BitWriter *bw, FILE *file, u64 interbuf_cap);
+void BitWriterInit(BitWriter *bw, FILE *sink, u64 interbuf_cap);
 void BitWriterDestroy(BitWriter *bw);
 void BitWriterWrite(BitWriter *bw, u64 code, u8 length);
 void BitWriterWrite64(BitWriter *bw, u64 value);

@@ -213,7 +213,7 @@ static void writeSerializedHuffmanTree(BitWriter *bw, HuffmanTree tree) {
 static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, const char *out, u8 threads) {
     BitWriter bw = {0};
     BitWriterInit(&bw, fopen(out, "wb"), 32 * 1024);
-    if (bw.file == NULL) handle_sys_error("fopen");
+    if (bw.sink == NULL) handle_sys_error("fopen");
 
     BitWriterWrite(&bw, MAGIC_NUMBER, 8 * 4);
     BitWriterWrite64(&bw, fsize); // Original file size

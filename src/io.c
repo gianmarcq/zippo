@@ -36,13 +36,13 @@ void StringFromBits(char *s, u64 buf, u8 len) {
 
 static void writeInterbuf(BitWriter *bw) {
     if (bw->interbuf.size > 0) {
-        fwrite(bw->interbuf.b, sizeof(*bw->interbuf.b), bw->interbuf.size, bw->file);
+        fwrite(bw->interbuf.b, sizeof(*bw->interbuf.b), bw->interbuf.size, bw->sink);
         bw->interbuf.size = 0;
     }
 }
 
-void BitWriterInit(BitWriter *bw, FILE *file, u64 interbuf_cap) {
-    bw->file = file;
+void BitWriterInit(BitWriter *bw, FILE *sink, u64 interbuf_cap) {
+    bw->sink = sink;
     bw->interbuf.cap = interbuf_cap;
     bw->interbuf.b = malloc(interbuf_cap);
 }
@@ -50,7 +50,7 @@ void BitWriterInit(BitWriter *bw, FILE *file, u64 interbuf_cap) {
 void BitWriterDestroy(BitWriter *bw) {
     BitWriterFlush(bw);
     free(bw->interbuf.b);
-    fclose(bw->file);
+    fclose(bw->sink);
 }
 
 /* This function allows to write 8 bytes by splitting in half
@@ -61,27 +61,40 @@ void BitWriterWrite64(BitWriter *bw, u64 value) {
     BitWriterWrite(bw, value >> 32, 32);
 }
 
+void bwMakeInterbufRoom(BitWriter *bw, u64 need) {
+    if (bw->interbuf.size + need <= bw->interbuf.cap) return;
+    // Streaming mode: dump interbuf content to file and continue accumulate-dump loop
+    if (bw->sink) writeInterbuf(bw);
+    else {
+        /* Memory mode: expand interbuf in order to store more bytes.
+         * When the chunk processing will be done, the entire interbuf
+         * will be written to destination file */
+    }
+}
+
+void bwMakeBufRoom(BitWriter *bw, u64 need) {
+    if (bw->used + need <= 64) return;
+    while (bw->used >= 8) {
+        bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer);
+        bw->buffer >>= 8;
+        bw->used -= 8;
+    }
+}
+
 void BitWriterWrite(BitWriter *bw, u64 code, u8 length) {
     /* The buffer might be storing some bits which are waiting to be written */
-    assert(length <= 56);
+    bwMakeBufRoom(bw, length);
 
     bw->buffer |= code << bw->used;
     bw->used += length;
 
     while (bw->used >= 32) {
-        // write byte after byte (slower)
-        // u8 byte = bw->buffer & (0xFF);
-        // bw->interbuf.b[bw->interbuf.size++] = byte;
+        bwMakeInterbufRoom(bw, 32);
 
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer);
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 8);
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 16);
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 24);
-
-        if (bw->interbuf.size >= bw->interbuf.cap) {
-            writeInterbuf(bw);
-        }
-
         bw->buffer >>= 32;
         bw->used -= 32;
     }
@@ -97,7 +110,8 @@ void BitWriterFlush(BitWriter *bw) {
         if (bw->used >= 8) bw->used -= 8;
         else bw->used = 0;
     }
-    writeInterbuf(bw);
+    // Streaming mode: empty interbuf and write to file
+    if (bw->sink) writeInterbuf(bw);
 }
 
 /* This function extract bytes from the file

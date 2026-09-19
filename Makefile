@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O3 -Iinclude
+CFLAGS = -Wall -Wextra -O3 -Iinclude -fsanitize=address
 SRC_DIR = src
 OBJ_DIR = obj
 BIN = zippo

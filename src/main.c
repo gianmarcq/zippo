@@ -1,5 +1,5 @@
 #include "common.h"
-#include "huffman.h"
+#include "engine.h"
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
     cs.in = argv[optind];
     cs.out = argv[optind + 1];
 
-    if (cs.mode == 'c') encode(cs.in, cs.out);
+    if (cs.mode == 'c') encode(cs.in, cs.out, cs.threads);
     else if (cs.mode == 'd') decode(cs.in, cs.out);
 
     return EXIT_SUCCESS;

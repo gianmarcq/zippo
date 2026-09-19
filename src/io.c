@@ -41,6 +41,18 @@ static void writeInterbuf(BitWriter *bw) {
     }
 }
 
+void BitWriterInit(BitWriter *bw, FILE *file, u64 interbuf_cap) {
+    bw->file = file;
+    bw->interbuf.cap = interbuf_cap;
+    bw->interbuf.b = malloc(interbuf_cap);
+}
+
+void BitWriterDestroy(BitWriter *bw) {
+    BitWriterFlush(bw);
+    free(bw->interbuf.b);
+    fclose(bw->file);
+}
+
 /* This function allows to write 8 bytes by splitting in half
  * the bit sequence in order to overcome the length limitation
  * Ref: BitWriterWrite */
@@ -66,7 +78,7 @@ void BitWriterWrite(BitWriter *bw, u64 code, u8 length) {
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 16);
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer >> 24);
 
-        if (bw->interbuf.size == INTERBUF_SIZE) {
+        if (bw->interbuf.size >= bw->interbuf.cap) {
             writeInterbuf(bw);
         }
 
@@ -78,10 +90,12 @@ void BitWriterWrite(BitWriter *bw, u64 code, u8 length) {
 /* Write final bits stored in the buffer, no
  * need for manual padding */
 void BitWriterFlush(BitWriter *bw) {
-    if (bw->used > 0) {
+    while (bw->used > 0) {
         u8 byte = bw->buffer & 0xFF;
         bw->interbuf.b[bw->interbuf.size++] = byte;
-        bw->used = 0;
+        bw->buffer >>= 8;
+        if (bw->used >= 8) bw->used -= 8;
+        else bw->used = 0;
     }
     writeInterbuf(bw);
 }

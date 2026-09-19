@@ -25,17 +25,16 @@ typedef struct {
     Encoding *encodings;
 } HuffmanTree;
 
-#define NTH 4
 typedef struct {
     const u8 *data;
     u8 id;
     pthread_t t;
     u64 start, end;
     u64 freq[ALPHABET_SIZE];
-} Thread;
+} FreqWorker;
 
 void* countFreqFromStartToEnd(void *arg) {
-    Thread *th = (Thread*) arg;
+    FreqWorker *th = (FreqWorker*) arg;
     const u8 *data = th->data;
     u64 *local_freq = th->freq;
     u8 byte;
@@ -47,29 +46,35 @@ void* countFreqFromStartToEnd(void *arg) {
     return 0;
 }
 
-static void countFrequencies(u64 freq[], const u8 *data, u64 size) {
+static void countFrequencies(u64 freq[], const u8 *data, u64 size, u8 threads) {
+    if (threads <= 1) {
+        for (u64 i = 0; i < size; i++)
+            freq[data[i]]++;
+        return;
+    }
+
     int s;
-    Thread *ths = calloc(NTH, sizeof(*ths));
-    for (u8 i = 0; i < NTH; i++) {
+    FreqWorker *ths = calloc(threads, sizeof(*ths));
+    for (u8 i = 0; i < threads; i++) {
 
         ths[i].id = i + 1;
         ths[i].data = data;
-        ths[i].start = (size / NTH) * i;
-        if (i == NTH - 1) ths[i].end = size;
-        else ths[i].end = ths[i].start + (size / NTH);
+        ths[i].start = (size / threads) * i;
+        if (i == threads - 1) ths[i].end = size;
+        else ths[i].end = ths[i].start + (size / threads);
 
         s = pthread_create(&ths[i].t, NULL, countFreqFromStartToEnd, ths + i);
         if (s != 0) handle_sys_error("pthread_create");
     }
 
-    for (u8 i = 0; i < NTH; i++) {
+    for (u8 i = 0; i < threads; i++) {
         s = pthread_join(ths[i].t, NULL);
         if (s != 0) handle_sys_error("pthread_join");
 
     }
 
     // join partial result into freq array
-    for (u8 i = 0; i < NTH; i++) {
+    for (u8 i = 0; i < threads; i++) {
         for (u16 c = 0; c < ALPHABET_SIZE; c++) {
             freq[c] += ths[i].freq[c];
         }
@@ -205,13 +210,17 @@ static void writeSerializedHuffmanTree(BitWriter *bw, HuffmanTree tree) {
 }
 
 /* Write bits to out following the binary format */
-static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, const char *out) {
-    BitWriter bw = { .file = fopen(out, "wb") };
+static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, const char *out, u8 threads) {
+    BitWriter bw = {0};
+    BitWriterInit(&bw, fopen(out, "wb"), 32 * 1024);
     if (bw.file == NULL) handle_sys_error("fopen");
 
     BitWriterWrite(&bw, MAGIC_NUMBER, 8 * 4);
     BitWriterWrite64(&bw, fsize); // Original file size
     writeSerializedHuffmanTree(&bw, tree);
+
+    // BitWriterWrite(&bw, threads, 8);
+    // BitWriterWrite(&bw, threads, 8);
 
     for (u64 i = 0; i < fim.size; i++) {
         u64 plain_sym = fim.data[i];
@@ -220,16 +229,15 @@ static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, c
         BitWriterWrite(&bw, code, len);
     }
 
-    BitWriterFlush(&bw);
-    fclose(bw.file);
+    BitWriterDestroy(&bw);
 }
 
-void encode(const char *path_in, const char *path_out) {
+void encode(const char *path_in, const char *path_out, u8 threads) {
     FileInMemory fim = FIMInit(path_in);
     u64 freq[ALPHABET_SIZE] = {0};
 
     /* Step 1: Count symbol frequencies */
-    countFrequencies(freq, fim.data, fim.size);
+    countFrequencies(freq, fim.data, fim.size, threads);
 
     /* Step 2: Symbols gets inserted into a Min Heap
      * defining symbol order based on frequence */
@@ -243,7 +251,7 @@ void encode(const char *path_in, const char *path_out) {
     HuffmanTreeGenerateEncodings(tree);
 
     /* Step 5: Write binary file following */
-    writeCompressedFile(fim, tree, fim.size, path_out);
+    writeCompressedFile(fim, tree, fim.size, path_out, threads);
 
     HeapDestroy(heap);
     FIMDestroy(fim);
@@ -269,7 +277,8 @@ static HuffmanTree readSerializedHuffmanTree(BitReader *br) {
 }
 
 static void writeDecompressedFile(BitReader *br, HuffmanTree tree, u64 target_size, const char *out) {
-    BitWriter bw = { .file = fopen(out, "wb") };
+    BitWriter bw = {0};
+    BitWriterInit(&bw, fopen(out, "wb"), 32 * 1024);
 
     TLink curr = tree.root;
 
@@ -287,8 +296,7 @@ static void writeDecompressedFile(BitReader *br, HuffmanTree tree, u64 target_si
         }
     }
 
-    BitWriterFlush(&bw);
-    fclose(bw.file);
+    BitWriterDestroy(&bw);
 }
 
 void decode(const char *path_in, const char *path_out) {
@@ -304,7 +312,7 @@ void decode(const char *path_in, const char *path_out) {
     if (target_size == 0) handle_user_error("Nothing to decompress: Original file size is zero");
 
     HuffmanTree tree = readSerializedHuffmanTree(&br);
-    writeDecompressedFile(&br, tree, target_size,path_out);
+    writeDecompressedFile(&br, tree, target_size, path_out);
 
     HuffmanTreeDestroy(tree);
     FIMDestroy(fim);

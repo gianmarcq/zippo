@@ -16,8 +16,6 @@ typedef struct {
 FileInMemory FIMInit(const char *filepath);
 void FIMDestroy(FileInMemory fim);
 
-#define INTERBUF_SIZE (32 * 1024) // 32 Kb
-
 #define BITSET(buf, i)   ((buf) |= (1ULL << (i)))
 #define BITUNSET(buf, i) ((buf) &= ~(1ULL << (i)))
 
@@ -28,11 +26,14 @@ typedef struct {
     /* The intermediate buffer is used to
      * reduce the number of syscalls */
     struct {
-        u8 b[INTERBUF_SIZE];
-        u16 size;
+        u64 cap;
+        u64 size;
+        u8 *b;
     } interbuf;
 } BitWriter;
 
+void BitWriterInit(BitWriter *bw, FILE *file, u64 interbuf_cap);
+void BitWriterDestroy(BitWriter *bw);
 void BitWriterWrite(BitWriter *bw, u64 code, u8 length);
 void BitWriterWrite64(BitWriter *bw, u64 value);
 void BitWriterFlush(BitWriter *bw);

@@ -31,7 +31,7 @@ void HeapPush(Heap heap, void *element) {
     if (heap->size == heap->capacity) {
         heap->capacity *= 2;
         heap->data = realloc(heap->data, sizeof(*heap->data) * heap->capacity);
-        if (heap->data == NULL) SYS_ERROR("realloc");
+        if (heap->data == NULL) handle_sys_error("realloc");
     }
     /* When inserting an element the Fix-Up logic allows to
      * mantain the functional property of the Heap */

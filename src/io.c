@@ -1,6 +1,7 @@
 #include "io.h"
 #include "common.h"
 #include <assert.h>
+#include <stdlib.h>
 
 FileInMemory FIMInit(const char *filepath) {
     FileInMemory fim = {NULL, 0, -1};
@@ -50,7 +51,7 @@ void BitWriterInit(BitWriter *bw, FILE *sink, u64 interbuf_cap) {
 void BitWriterDestroy(BitWriter *bw) {
     BitWriterFlush(bw);
     free(bw->interbuf.b);
-    fclose(bw->sink);
+    if (bw->sink) fclose(bw->sink);
 }
 
 /* This function allows to write 8 bytes by splitting in half
@@ -69,12 +70,17 @@ void bwMakeInterbufRoom(BitWriter *bw, u64 need) {
         /* Memory mode: expand interbuf in order to store more bytes.
          * When the chunk processing will be done, the entire interbuf
          * will be written to destination file */
+        while (bw->interbuf.size + need > bw->interbuf.cap)
+            bw->interbuf.cap = bw->interbuf.cap ? bw->interbuf.cap * 2 : 4096;
+        bw->interbuf.b = reallocarray(bw->interbuf.b, bw->interbuf.cap, sizeof(*bw->interbuf.b));
+        if (bw->interbuf.b == NULL) handle_sys_error("reallocarray");
     }
 }
 
 void bwMakeBufRoom(BitWriter *bw, u64 need) {
     if (bw->used + need <= 64) return;
     while (bw->used >= 8) {
+        bwMakeInterbufRoom(bw, 8);
         bw->interbuf.b[bw->interbuf.size++] = (u8)(bw->buffer);
         bw->buffer >>= 8;
         bw->used -= 8;
@@ -104,6 +110,7 @@ void BitWriterWrite(BitWriter *bw, u64 code, u8 length) {
  * need for manual padding */
 void BitWriterFlush(BitWriter *bw) {
     while (bw->used > 0) {
+        bwMakeInterbufRoom(bw, 8);
         u8 byte = bw->buffer & 0xFF;
         bw->interbuf.b[bw->interbuf.size++] = byte;
         bw->buffer >>= 8;
@@ -112,6 +119,12 @@ void BitWriterFlush(BitWriter *bw) {
     }
     // Streaming mode: empty interbuf and write to file
     if (bw->sink) writeInterbuf(bw);
+}
+
+void BitReaderByteAlign(BitReader *br) {
+    /* Skip bits in the buffer */
+    br->buffer = 0;
+    br->available = 0;
 }
 
 /* This function extract bytes from the file

@@ -47,6 +47,7 @@ typedef struct {
     u8 available; // bits to consume
 } BitReader;
 
+void BitReaderByteAlign(BitReader *br);
 u64 BitReaderRead(BitReader *br, u8 length);
 u64 BitReaderRead64(BitReader *br);
 

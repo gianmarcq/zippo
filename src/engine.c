@@ -16,10 +16,13 @@ typedef struct {
     u8 id;
 } FreqWorker;
 
-static void chunkRange(u64 size, u8 nchunks, u8 i, u64 *start, u64 *end) {
+static u64 chunkRange(u64 size, u8 nchunks, u8 i, u64 *start, u64 *end) {
     u64 base = size / nchunks;
-    *start = base * i;
-    *end = (i == nchunks-1) ? size : *start + base;
+    u64 s = base * i;
+    u64 e = (i == nchunks-1) ? size : s + base;
+    if(start) *start = s;
+    if (end) *end = e;
+    return e - s;
 }
 
 void* countChunkFreq(void *arg) {
@@ -184,7 +187,6 @@ static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, c
 
     if (threads > 1) {
         for (u8 i = 0; i < threads; i++) {
-            BitWriterWrite64(&bw, ths[i].end - ths[i].start);
             BitWriterWrite64(&bw, ths[i].total_bits);
         }
     }
@@ -307,25 +309,19 @@ void decode(const char *path_in, const char *path_out, u8 threads) {
 
         /* Read chunk metadata from the tail and calculate the file offset
          * in the decompressed file (allow parallel writing on output file) */
-        br.pos = in_fim.size - (nchunks * 16);
-        u64 d_offset, c_offset = payload_start, total_uncompressed_size;
-        d_offset = total_uncompressed_size = 0;
+        br.pos = in_fim.size - (nchunks * 8);
+        u64 c_offset = payload_start;
         for (u8 i = 0; i < nchunks; i++) {
-            chunks[i].d_size = BitReaderRead64(&br); // original chunk size
             chunks[i].c_bits = BitReaderRead64(&br); // compressed chunk size (in bits)
-
-            chunks[i].d_offset = d_offset;
+            chunks[i].d_size = chunkRange(target_size, nchunks, i, &chunks[i].d_offset, NULL);
             chunks[i].c_offset = c_offset;
-
-            d_offset += chunks[i].d_size;
             c_offset += (chunks[i].c_bits + 7) >> 3;
-            total_uncompressed_size += chunks[i].d_size;
         }
 
         /* extend file length to total_uncompressed_size in order to avoid
          * SIGBUS when trying to access a position in the memory that goes beyond
          * real file size */
-        FileInMemory out_fim = FIMOpen(path_out, total_uncompressed_size, FIM_RW);
+        FileInMemory out_fim = FIMOpen(path_out, target_size, FIM_RW);
         DecompContext dc = {
             .chunks = chunks,
             .tree = &tree,

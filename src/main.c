@@ -31,7 +31,6 @@ int main(int argc, char **argv) {
                 break;
             case 'j':
                 cs.threads = atoi(optarg);
-                if (cs.threads < 1) cs.threads = 1;
                 break;
             default:
                 handle_user_error("Invalid argument '%s'", optarg);
@@ -40,6 +39,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (cs.threads < 1) cs.threads = 1;
     if (cs.mode == 0 || argc - optind != 2) {
         print_help(cs.prg_name);
         return EXIT_FAILURE;
@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
     cs.out = argv[optind + 1];
 
     if (cs.mode == 'c') encode(cs.in, cs.out, cs.threads);
-    else if (cs.mode == 'd') decode(cs.in, cs.out);
+    else if (cs.mode == 'd') decode(cs.in, cs.out, cs.threads);
 
     return EXIT_SUCCESS;
 }

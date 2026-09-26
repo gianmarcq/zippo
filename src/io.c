@@ -1,31 +1,62 @@
 #include "io.h"
 #include "common.h"
 #include <assert.h>
+#include <fcntl.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 
-FileInMemory FIMInit(const char *filepath) {
-    FileInMemory fim = {NULL, 0, -1};
-    fim.fd = open(filepath, O_RDONLY);
-    if (fim.fd == -1) handle_sys_error("open");
+FileInMemory FIMOpen(const char *filepath, u64 size, FIMFlag flag) {
+    FileInMemory fim = {
+        .data = NULL,
+        .size = 0,
+        .fd = -1,
+        .flag= flag
+    };
 
-    /* Retrieve information about the file pointed
-     * by fim.fd (number of bytes, ...) */
-    struct stat info;
-    if (fstat(fim.fd, &info) == -1) handle_sys_error("fstat");
-    fim.size = info.st_size;
+    i32 open_flags;
+    switch (flag) {
+        case FIM_RD:
+            open_flags = O_RDONLY;
+            break;
+        case FIM_RW:
+            open_flags = O_RDWR | O_CREAT;
+            break;
+        default:
+            handle_user_error("Invalid FIMOpen flag");
+            break;
+    }
 
-    /* Handle edge-case: an emtpy file would cause
-     * segfault on reading attempt */
-    if (fim.size == 0) handle_user_error("%s is Empty, Nothing to Do", filepath);
+    fim.fd = open(filepath, open_flags, 0644);
+    if (fim.fd < 0) handle_sys_error("open");
+    //        user group others
+    // 0644 = 110  100   100
 
-    fim.data = mmap(NULL, fim.size, PROT_READ, MAP_PRIVATE, fim.fd, 0);
+    if (flag == FIM_RW) {
+        if (size <= 0) handle_user_error("Cannot read or write to file with size %lu", size);
+        if (ftruncate(fim.fd, size) != 0) handle_sys_error("ftruncate");
+        fim.size = size;
+    } else if (flag == FIM_RD) {
+        /* Retrieve information about the file pointed
+         * by fim.fd (number of bytes, ...) */
+        struct stat info;
+        if (fstat(fim.fd, &info) == -1) handle_sys_error("fstat");
+        fim.size = info.st_size;
+        /* WARNING: an emtpy file would cause
+         * segfault on reading attempt,
+         * returning and leaving fim.data = NULL */
+        if (fim.size == 0) return fim;
+    }
+
+    i32 map_prot = flag == FIM_RW ? (PROT_WRITE | PROT_READ) : PROT_READ;
+    i32 map_flags = flag == FIM_RD ? MAP_PRIVATE : MAP_SHARED;
+    fim.data = mmap(NULL, fim.size, map_prot, map_flags, fim.fd, 0);
     if (fim.data == MAP_FAILED) handle_sys_error("mmap");
     return fim;
 }
 
 void FIMDestroy(FileInMemory fim) {
-    close(fim.fd);
     munmap(fim.data, fim.size);
+    close(fim.fd);
 }
 
 void StringFromBits(char *s, u64 buf, u8 len) {

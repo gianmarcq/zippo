@@ -7,13 +7,19 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+typedef enum {
+    FIM_RD, // Read only
+    FIM_RW, // Read and write
+} FIMFlag;;
+
 typedef struct {
     u8 *data;
     u64 size;
-    int fd;
+    i32 fd;
+    FIMFlag flag;
 } FileInMemory;
 
-FileInMemory FIMInit(const char *filepath);
+FileInMemory FIMOpen(const char *filepath, u64 size, FIMFlag);
 void FIMDestroy(FileInMemory fim);
 
 #define BITSET(buf, i)   ((buf) |= (1ULL << (i)))

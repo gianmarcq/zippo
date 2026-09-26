@@ -1,4 +1,5 @@
 #include "huffman.h"
+#include "common.h"
 #include "heap.h"
 #include "io.h"
 #include <stdlib.h>
@@ -115,6 +116,7 @@ HuffmanTree HTInit(u64 *freq, u16 alphabet_size) {
     /* Step 2: Symbols gets inserted into a Min Heap
      * defining symbol order based on frequence */
     Heap heap = fillHeap(freq, alphabet_size);
+    if (HeapIsEmpty(heap)) handle_user_error("Input file is empty");
 
     /* Step 3: Build the Huffman tree given the heap */
     HuffmanTree tree = HuffmanTreeBuild(heap, alphabet_size);

@@ -6,7 +6,7 @@
 #define MAGIC_NUMBER 0x87654321
 
 void encode(const char *path_in, const char *path_out, u8 threads);
-void decode(const char *path_in, const char *path_out);
+void decode(const char *path_in, const char *path_out, u8 threads);
 
 #endif // !ENGINE_H
 

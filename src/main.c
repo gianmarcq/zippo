@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
                 cs.mode = opt;
                 break;
             case 'j':
-                cs.threads = atoi(optarg);
+                if ((cs.threads = atoi(optarg)) == 0) handle_user_error("Specify a valid number of threads, not %d", cs.threads);
                 break;
             default:
                 handle_user_error("Invalid argument '%s'", optarg);

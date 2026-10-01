@@ -263,7 +263,6 @@ typedef struct {
 typedef struct {
     pthread_t t;
     DecompContext *dc;
-    BitReader br;         // Read bits from input file (compressed)
 } ReadWorker;
 
 void decodeChunk(ChunkInfo *ci, BitReader *br, HuffmanTree *tree, u8 *out, u64 offset) {
@@ -284,8 +283,8 @@ void *decodeController(void *arg) {
     while (1) {
         u8 chunk_id = atomic_fetch_add(&dc->next_chunk, 1);
         if (chunk_id >= dc->total_chunks) break;
-        rw->br = (BitReader) { .fim = dc->in_fim, .pos = dc->chunks[chunk_id].c_offset };
-        decodeChunk(&dc->chunks[chunk_id], &rw->br, dc->tree, dc->out_data, dc->chunks[chunk_id].d_offset);
+        BitReader br = (BitReader) { .fim = dc->in_fim, .pos = dc->chunks[chunk_id].c_offset };
+        decodeChunk(&dc->chunks[chunk_id], &br, dc->tree, dc->out_data, dc->chunks[chunk_id].d_offset);
     }
 
     return 0;

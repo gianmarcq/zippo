@@ -54,7 +54,9 @@ typedef struct {
 } BitReader;
 
 void BitReaderByteAlign(BitReader *br);
-u64 BitReaderRead(BitReader *br, u8 length);
-u64 BitReaderRead64(BitReader *br);
+u64  BitReaderRead(BitReader *br, u8 length);
+u64  BitReaderRead64(BitReader *br);
+u64  BitReaderPeek(BitReader *br, u8 length);
+void BitReaderSkip(BitReader *br, u8 length);
 
 #endif // !IO_H

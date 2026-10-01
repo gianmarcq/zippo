@@ -158,13 +158,8 @@ void BitReaderByteAlign(BitReader *br) {
     br->available = 0;
 }
 
-/* This function extract bytes from the file
- * in order to fullfill the bits request.
- * Pending bits are stored in buffer, a
- * <length> number of bits is returned */
-u64 BitReaderRead(BitReader *br, u8 length) {
-    assert(length <= 56);
-    while (br->available < length) {
+static void BitReaderFulfillRequest(BitReader *br, u8 req_bits) {
+    while (br->available < req_bits) {
         u8 byte = 0;
         if (br->pos < br->fim->size) {
             byte = br->fim->data[br->pos++];
@@ -172,6 +167,15 @@ u64 BitReaderRead(BitReader *br, u8 length) {
         br->buffer |= ((u64) byte << br->available);
         br->available += 8;
     }
+}
+
+/* This function extract bytes from the file
+ * in order to fullfill the bits request.
+ * Pending bits are stored in buffer, a
+ * <length> number of bits is returned */
+u64 BitReaderRead(BitReader *br, u8 length) {
+    assert(length <= 56);
+    BitReaderFulfillRequest(br, length);
 
     u64 res = br->buffer & ~(~0ULL << length);
     br->buffer >>= length;
@@ -184,4 +188,14 @@ u64 BitReaderRead64(BitReader *br) {
     u64 low = BitReaderRead(br, 32);
     u64 high = BitReaderRead(br, 32);
     return low | (high << 32);
+}
+
+u64 BitReaderPeek(BitReader *br, u8 length) {
+    assert(length <= 56);
+    BitReaderFulfillRequest(br, length);
+    return br->buffer & ~(~0ULL << length);
+}
+
+void BitReaderSkip(BitReader *br, u8 length) {
+    (void)BitReaderRead(br, length);
 }

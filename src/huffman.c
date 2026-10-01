@@ -108,7 +108,7 @@ static HuffmanTree HuffmanTreeBuild(Heap heap, u16 alphabet_size) {
         HeapPush(heap, z);
     }
 
-    HuffmanTree tree = { .root = HeapPop(heap), .encodings = calloc(alphabet_size, sizeof(Encoding)), .alphabet_size = alphabet_size};
+    HuffmanTree tree = { .root = HeapPop(heap), .encodings = calloc(alphabet_size, sizeof(Encoding)), .alphabet_size = alphabet_size, .lut = NULL };
     return tree;
 }
 
@@ -130,8 +130,9 @@ HuffmanTree HTInit(u64 *freq, u16 alphabet_size) {
 }
 
 void HTDestroy(HuffmanTree tree) {
-    freeTree(tree.root);
-    free(tree.encodings);
+    if (tree.root) freeTree(tree.root);
+    if (tree.encodings) free(tree.encodings);
+    if (tree.lut) free(tree.lut);
 }
 
 void HTWriteSerializedTree(HuffmanTree tree, BitWriter *bw) {
@@ -140,4 +141,28 @@ void HTWriteSerializedTree(HuffmanTree tree, BitWriter *bw) {
 
 HuffmanTree HTReadSerializedTree(BitReader *br) {
     return (HuffmanTree) { .root = readTreeR(br) };
+}
+
+static void buildDecodeLutR(TLink root, DecodeEntry *lut, u64 code, u8 d) {
+    if (root->left == NULL && root->right == NULL) {
+        // found symbol;
+        for (u64 i = code; i < LUT_SIZE; i += (1u << d)) {
+            /* i += (1u << d) allows me to iterate
+             * on a list of numbers whose d low bits are
+             * equal to code */
+           lut[i] = (DecodeEntry) { .sym = root->sym, .len = d };
+        }
+        return;
+    }
+    if (d == LUT_BITS) return; // not a symbol and out of lut scope
+    buildDecodeLutR(root->left, lut, code, d + 1);
+    BITSET(code, d);
+    buildDecodeLutR(root->right, lut, code, d + 1);
+}
+
+void HTBuildDecodeLut(HuffmanTree *tree) {
+    if (tree->root == NULL) return;
+    tree->lut = calloc(LUT_SIZE, sizeof(*tree->lut));
+    if (tree->lut == NULL) handle_sys_error("calloc");
+    buildDecodeLutR(tree->root, tree->lut, 0, 0);
 }

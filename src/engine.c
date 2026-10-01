@@ -212,24 +212,34 @@ void encode(const char *path_in, const char *path_out, u8 threads) {
     HTDestroy(tree);
 }
 
+static u8 decodeSym(BitReader *br, const HuffmanTree *tree, DecodeEntry e) {
+    TLink curr = tree->root;
+    u8 sym;
+    /* If the root is a leaf, tree traversal branch
+     * starts and immediatly find the symbol */
+    if (e.len != 0) {
+        sym = e.sym;
+        BitReaderSkip(br, e.len);
+    } else {
+        // Symbol is not in lut, start tree traversal
+        while (curr->left != NULL || curr->right != NULL)
+            curr = BitReaderRead(br, 1) == 0 ? curr->left : curr->right;
+        sym = curr->sym;
+    }
+    return sym;
+}
+
 static void writeDecompressedFile(BitReader *br, HuffmanTree tree, u64 target_size, const char *out) {
     BitWriter bw = {0};
     BitWriterInit(&bw, fopen(out, "wb"), 32 * 1024);
-
-    TLink curr = tree.root;
-
-    /* Decoding happens by leveraging prefix-free property
-     * of the Huffman codes. Traverse the tree by keeping track of
-     * the bit sequence formulated until you encounter a leaf,
-     * there you know you've decoded a symbol */
+    u8 sym;
+    u64 bits;
     while (target_size > 0) {
-        curr = BitReaderRead(br, 1) == 0 ? curr->left : curr->right;
-        if (curr->left == NULL && curr->right == NULL) {
-            u8 sym = curr->sym;
-            BitWriterWrite(&bw, (u64) sym, 8);
-            curr = tree.root;
-            target_size--;
-        }
+        bits = BitReaderPeek(br, LUT_BITS);
+        DecodeEntry e = tree.lut[bits];
+        sym = decodeSym(br, &tree, e);
+        BitWriterWrite(&bw, (u64) sym, 8);
+        target_size--;
     }
 
     BitWriterDestroy(&bw);
@@ -257,19 +267,13 @@ typedef struct {
 } ReadWorker;
 
 void decodeChunk(ChunkInfo *ci, BitReader *br, HuffmanTree *tree, u8 *out, u64 offset) {
-    TLink curr = tree->root;
-    u64 written_bytes = 0;
-
-    /* Decoding happens by leveraging prefix-free property
-     * of the Huffman codes. Traverse the tree by keeping track of
-     * the bit sequence formulated until you encounter a leaf,
-     * there you know you've decoded a symbol */
+    u8 sym;
+    u64 written_bytes = 0, bits;
     while (written_bytes < ci->d_size) {
-        curr = BitReaderRead(br, 1) == 0 ? curr->left : curr->right;
-        if (curr->left == NULL && curr->right == NULL) {
-            out[offset + (written_bytes++)] = curr->sym;
-            curr = tree->root;
-        }
+        bits = BitReaderPeek(br, LUT_BITS);
+        DecodeEntry e = tree->lut[bits];
+        sym = decodeSym(br, tree, e);
+        out[offset + (written_bytes++)] = sym;
     }
 }
 
@@ -301,6 +305,8 @@ void decode(const char *path_in, const char *path_out, u8 threads) {
 
     HuffmanTree tree = HTReadSerializedTree(&br);
     BitReaderByteAlign(&br);
+    HTBuildDecodeLut(&tree);
+
     u8 nchunks = BitReaderRead(&br, 8);
 
     if (nchunks > 1) {

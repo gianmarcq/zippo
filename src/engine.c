@@ -141,57 +141,56 @@ static void writeCompressedFile(FileInMemory fim, HuffmanTree tree, u64 fsize, c
     BitWriterWrite(&bw, MAGIC_NUMBER, 8 * 4);
     BitWriterWrite64(&bw, fsize); // Original file size
     HTWriteSerializedTree(tree, &bw);
-
     BitWriterFlush(&bw); // Byte-align the serialized tree
-    if (threads <= 1) BitWriterWrite(&bw,  (u8) 0, 8);
-    else              BitWriterWrite(&bw, threads, 8);
+
+    BitWriterWrite(&bw, threads, 8);
     BitWriterFlush(&bw); // Write new byte immediatly before chunk processing
 
-    if (threads <= 1) {
+    if (threads == 1) {
+        // use main-thread
+        u64 total_bits = 0;
         for (u64 i = 0; i < fim.size; i++) {
             u64 plain_sym = fim.data[i];
             u64 code = tree.encodings[plain_sym].code;
             u8 len = tree.encodings[plain_sym].length;
+            total_bits += len;
             BitWriterWrite(&bw, code, len);
         }
-
-        BitWriterDestroy(&bw);
-        return;
-    }
-
-    int s;
-    WriteWorker *ths = calloc(threads, sizeof(*ths));
-    for (u8 i = 0; i < threads; i++) {
-        ths[i].id = i + 1;
-        ths[i].data = fim.data;
-        ths[i].encs = tree.encodings;
-        /* sink = NULL, BitWriter in Memory Mode
-         * NOTE: Initial interbuf capacity could be calculated in order
-         * to approximate the number of bytes that will be occupied
-         * by the encoded data, for semplicity sake, I skip this optimization */
-        BitWriterInit(&ths[i].bw, NULL, MEMORY_INTERBUF_CAP);
-        chunkRange(fim.size, threads, i, &ths[i].start, &ths[i].end);
-
-        s = pthread_create(&ths[i].t, NULL, encodeChunk, ths + i);
-        if (s != 0) handle_sys_error("pthread_create");
-    }
-
-    for (u8 i = 0; i < threads; i++) {
-        s = pthread_join(ths[i].t, NULL);
-        if (s != 0) handle_sys_error("pthread_join");
-
-        BitWriterFlush(&ths[i].bw);
-        fwrite(ths[i].bw.interbuf.b, 1, ths[i].bw.interbuf.size, fout);
-        BitWriterDestroy(&ths[i].bw);
-    }
-
-    if (threads > 1) {
+        // Byte-align the payload
+        BitWriterFlush(&bw);
+        BitWriterWrite64(&bw, total_bits);
+    } else {
+        int s;
+        WriteWorker *ths = calloc(threads, sizeof(*ths));
         for (u8 i = 0; i < threads; i++) {
-            BitWriterWrite64(&bw, ths[i].total_bits);
+            ths[i].id = i + 1;
+            ths[i].data = fim.data;
+            ths[i].encs = tree.encodings;
+            /* sink = NULL, BitWriter in Memory Mode
+             * NOTE: Initial interbuf capacity could be calculated in order
+             * to approximate the number of bytes that will be occupied
+             * by the encoded data, for semplicity sake, I skip this optimization */
+            BitWriterInit(&ths[i].bw, NULL, MEMORY_INTERBUF_CAP);
+            chunkRange(fim.size, threads, i, &ths[i].start, &ths[i].end);
+
+            s = pthread_create(&ths[i].t, NULL, encodeChunk, ths + i);
+            if (s != 0) handle_sys_error("pthread_create");
         }
+
+        for (u8 i = 0; i < threads; i++) {
+            s = pthread_join(ths[i].t, NULL);
+            if (s != 0) handle_sys_error("pthread_join");
+
+            BitWriterFlush(&ths[i].bw);
+            fwrite(ths[i].bw.interbuf.b, 1, ths[i].bw.interbuf.size, fout);
+            BitWriterDestroy(&ths[i].bw);
+        }
+
+        for (u8 i = 0; i < threads; i++) BitWriterWrite64(&bw, ths[i].total_bits);
+
+        free(ths);
     }
 
-    free(ths);
     BitWriterDestroy(&bw);
 }
 
@@ -229,22 +228,6 @@ static u8 decodeSym(BitReader *br, const HuffmanTree *tree, DecodeEntry e) {
     return sym;
 }
 
-static void writeDecompressedFile(BitReader *br, HuffmanTree tree, u64 target_size, const char *out) {
-    BitWriter bw = {0};
-    BitWriterInit(&bw, fopen(out, "wb"), 32 * 1024);
-    u8 sym;
-    u64 bits;
-    while (target_size > 0) {
-        bits = BitReaderPeek(br, LUT_BITS);
-        DecodeEntry e = tree.lut[bits];
-        sym = decodeSym(br, &tree, e);
-        BitWriterWrite(&bw, (u64) sym, 8);
-        target_size--;
-    }
-
-    BitWriterDestroy(&bw);
-}
-
 typedef struct {
     u64 d_size, d_offset; // decompressed chunk size (byte), chunk offset in original file
     u64 c_bits, c_offset; // compressed chunk size (bits), chunk offset in compressed file
@@ -260,11 +243,6 @@ typedef struct {
     u8 total_chunks;
 } DecompContext;
 
-typedef struct {
-    pthread_t t;
-    DecompContext *dc;
-} ReadWorker;
-
 void decodeChunk(ChunkInfo *ci, BitReader *br, HuffmanTree *tree, u8 *out, u64 offset) {
     u8 sym;
     u64 written_bytes = 0, bits;
@@ -277,8 +255,7 @@ void decodeChunk(ChunkInfo *ci, BitReader *br, HuffmanTree *tree, u8 *out, u64 o
 }
 
 void *decodeController(void *arg) {
-    ReadWorker *rw = (ReadWorker*) arg;
-    DecompContext *dc = rw->dc;
+    DecompContext *dc = (DecompContext*) arg;
 
     while (1) {
         u8 chunk_id = atomic_fetch_add(&dc->next_chunk, 1);
@@ -308,55 +285,63 @@ void decode(const char *path_in, const char *path_out, u8 threads) {
 
     u8 nchunks = BitReaderRead(&br, 8);
 
-    if (nchunks > 1) {
-        u64 payload_start = br.pos;
-        ChunkInfo *chunks = malloc(nchunks * sizeof(*chunks));
+    u64 payload_start = br.pos;
+    ChunkInfo *chunks = malloc(nchunks * sizeof(*chunks));
 
-        /* Read chunk metadata from the tail and calculate the file offset
-         * in the decompressed file (allow parallel writing on output file) */
-        br.pos = in_fim.size - (nchunks * 8);
-        u64 c_offset = payload_start;
-        for (u8 i = 0; i < nchunks; i++) {
-            chunks[i].c_bits = BitReaderRead64(&br); // compressed chunk size (in bits)
-            chunks[i].d_size = chunkRange(target_size, nchunks, i, &chunks[i].d_offset, NULL);
-            chunks[i].c_offset = c_offset;
-            c_offset += (chunks[i].c_bits + 7) >> 3;
-        }
+    /* Read chunk metadata from the tail and calculate the file offset
+     * in the decompressed file (allow parallel writing on output file) */
+    br.pos = in_fim.size - (nchunks * 8);
+    u64 c_offset = payload_start;
+    for (u8 i = 0; i < nchunks; i++) {
+        chunks[i].c_bits = BitReaderRead64(&br); // compressed chunk size (in bits)
+        chunks[i].d_size = chunkRange(target_size, nchunks, i, &chunks[i].d_offset, NULL);
+        chunks[i].c_offset = c_offset;
+        c_offset += (chunks[i].c_bits + 7) >> 3;
+    }
 
-        /* extend file length to total_uncompressed_size in order to avoid
-         * SIGBUS when trying to access a position in the memory that goes beyond
-         * real file size */
-        FileInMemory out_fim = FIMOpen(path_out, target_size, FIM_RW);
-        DecompContext dc = {
-            .chunks = chunks,
-            .tree = &tree,
-            .in_fim = &in_fim,
-            .out_data = out_fim.data,
-            .next_chunk = 0,
-            .total_chunks = nchunks
-        };
+    /* extend file length to total_uncompressed_size in order to avoid
+     * SIGBUS when trying to access a position in the memory that goes beyond
+     * real file size */
+    FileInMemory out_fim = FIMOpen(path_out, target_size, FIM_RW);
+    DecompContext dc = {
+        .chunks = chunks,
+        .tree = &tree,
+        .in_fim = &in_fim,
+        .out_data = out_fim.data,
+        .next_chunk = 0,
+        .total_chunks = nchunks
+    };
 
-        ReadWorker *rw = calloc(threads, sizeof(*rw));
-        br.pos = payload_start;
+    /* Spawning more workers than chunks would
+     * only create threads that immediately die. -j flag
+     * decides the number of workers that can decode chunks
+     * if the number of threads is greater than the number of
+     * chunks, than threads-nchunks workers will be generated
+     * and immediately die in the controller because the
+     * chunk boundaries are decided during compression phase,
+     * and a chunk is the basic unit of work for a thread */
+    u8 nworkers = threads < nchunks ? threads : nchunks;
+
+    if (nworkers <= 1) {
+        // main-thread
+        decodeController(&dc);
+    } else {
+        pthread_t *ths = calloc(nworkers, sizeof(*ths));
         i32 s;
-        for (u8 i = 0; i < threads; i++) {
-            rw[i].dc = &dc;
-            s = pthread_create(&rw[i].t, NULL, decodeController, rw + i);
+        for (u8 i = 0; i < nworkers; i++) {
+            s = pthread_create(&ths[i], NULL, decodeController, &dc);
             if (s != 0) handle_sys_error("pthread_create");
         }
 
-        for (u8 i = 0; i < threads; i++) {
-            s = pthread_join(rw[i].t, NULL);
+        for (u8 i = 0; i < nworkers; i++) {
+            s = pthread_join(ths[i], NULL);
             if (s != 0) handle_sys_error("pthread_join");
         }
-
-        free(rw);
-        free(chunks);
-        FIMDestroy(out_fim);
-    } else {
-        writeDecompressedFile(&br, tree, target_size, path_out);
+        free(ths);
     }
 
+    free(chunks);
+    FIMDestroy(out_fim);
     HTDestroy(tree);
     FIMDestroy(in_fim);
 }

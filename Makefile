@@ -21,10 +21,13 @@ $(OBJ_DIR):
 test: $(BIN)
 	./test.sh ./$(BIN)
 
+bench: $(BIN)
+	./bench.sh
+
 clean:
 	rm -rf $(OBJ_DIR) $(BIN)
 
 debug: CFLAGS = -Wall -Wextra -g -O0 -Iinclude -fsanitize=address
 debug: clean $(BIN)
 
-.PHONY: all clean test debug
+.PHONY: all clean test bench debug
